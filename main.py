@@ -3,7 +3,10 @@ import random
 import re
 import smtplib
 import time
+from email.mime.application import MIMEApplication
+from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.utils import formataddr
 from pathlib import Path
 
 import config
@@ -14,6 +17,7 @@ BASE_DIR = Path(__file__).resolve().parent
 EMAILS_FILE = BASE_DIR / "emails.csv"
 REJECTED_FILE = BASE_DIR / "rejected.txt"
 TEMPLATE_FILE = BASE_DIR / "template.txt"
+CV_FILE = BASE_DIR / config.CV_FILENAME
 
 
 def extract_company_name_from_email(email_address: str) -> str:
@@ -105,12 +109,24 @@ def load_template(template_path: Path) -> str:
     return template_path.read_text(encoding="utf-8")
 
 
-def build_message(recipient: str, body: str) -> MIMEText:
-    """Build the plain-text email message."""
-    message = MIMEText(body, "plain", "utf-8")
+def build_message(recipient: str, body: str) -> MIMEMultipart:
+    """Build the email message with the text body and CV attachment."""
+    message = MIMEMultipart()
     message["Subject"] = config.EMAIL_SUBJECT
-    message["From"] = config.SENDER_EMAIL
+    message["From"] = formataddr((config.SENDER_NAME, config.SENDER_EMAIL))
     message["To"] = recipient
+
+    message.attach(MIMEText(body, "plain", "utf-8"))
+
+    with CV_FILE.open("rb") as cv_file:
+        attachment = MIMEApplication(cv_file.read(), _subtype="pdf")
+
+    attachment.add_header(
+        "Content-Disposition",
+        "attachment",
+        filename=CV_FILE.name,
+    )
+    message.attach(attachment)
     return message
 
 
@@ -119,7 +135,8 @@ def send_email(recipient: str, body: str) -> None:
     if config.DRY_RUN:
         print(
             f"dry run: would send '{config.EMAIL_SUBJECT}' "
-            f"from {config.SENDER_EMAIL} to {recipient}"
+            f"from {config.SENDER_NAME} <{config.SENDER_EMAIL}> to {recipient} "
+            f"with attachment {CV_FILE.name}"
         )
         return
 
@@ -160,6 +177,9 @@ def validate_config() -> bool:
         errors.append(
             "GMAIL_APP_PASSWORD is missing. Set it in your environment before running."
         )
+
+    if not CV_FILE.exists():
+        errors.append(f"CV file not found: {CV_FILE.name}")
 
     if config.MIN_DELAY_SECONDS < 0:
         errors.append("MIN_DELAY_SECONDS cannot be negative.")
