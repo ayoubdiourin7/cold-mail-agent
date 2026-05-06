@@ -1,0 +1,28 @@
+# Python cache and virtual environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+env/
+newenv/
+
+# OS/editor noise
+.DS_Store
+
+# Local secrets
+.env
+project/.env
+
+# Personal outreach data
+emails.csv
+rejected.txt
+sent.txt
+template.txt
+
+# Private source documents and exports
+data/
+*.xlsx
+*.xls
+*.pdf
