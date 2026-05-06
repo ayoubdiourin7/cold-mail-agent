@@ -9,13 +9,14 @@ It does the following:
 - attaches `cv.pdf` to every email
 - skips companies listed in `rejected.txt`
 - waits a random delay between emails
+- can optionally send batches with hidden BCC recipients
 - supports `DRY_RUN` mode for safe testing
 
 ## Files
 
 - `main.py`: main logic
 - `apply.py`: simple entrypoint
-- `config.py`: SMTP settings, sender info, delays, and attachment name
+- `config.py`: SMTP settings, sender info, delays, attachment name, and BCC batching
 - `emails.csv`: contact list
 - `template.txt`: email body
 - `rejected.txt`: companies to skip
@@ -48,6 +49,8 @@ Important settings in `config.py`:
 
 - `DRY_RUN = True` sends nothing and only prints what would happen
 - `CV_FILENAME = "cv.pdf"` sets the attached file
+- `BATCH_SEND_BY_BCC = True` switches from one-by-one sends to hidden BCC batches
+- `BCC_BATCH_SIZE = 10` controls how many contacts are included in each BCC batch
 - `MIN_DELAY_SECONDS` and `MAX_DELAY_SECONDS` control the random wait time
 
 ## Run
@@ -59,3 +62,5 @@ python3 apply.py
 ```
 
 For a real send, set `DRY_RUN = False` in `config.py`.
+
+If you want to hide recipients from each other while still sending in groups, also set `BATCH_SEND_BY_BCC = True`.

@@ -44,7 +44,13 @@ EMAIL_SUBJECT = os.getenv("EMAIL_SUBJECT", "")
 CV_FILENAME = "cv.pdf"
 
 # If True, no real email is sent.
-DRY_RUN = False
+DRY_RUN = True
+
+# If True, send contacts in hidden BCC batches instead of one by one.
+BATCH_SEND_BY_BCC = False
+
+# Number of contacts per hidden BCC batch when BATCH_SEND_BY_BCC is enabled.
+BCC_BATCH_SIZE = 10
 
 # Random wait time between emails, in seconds.
 MIN_DELAY_SECONDS = 20

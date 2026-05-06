@@ -18,6 +18,7 @@ EMAILS_FILE = BASE_DIR / "emails.csv"
 REJECTED_FILE = BASE_DIR / "rejected.txt"
 TEMPLATE_FILE = BASE_DIR / "template.txt"
 CV_FILE = BASE_DIR / config.CV_FILENAME
+BCC_TO_HEADER = "undisclosed-recipients:;"
 
 
 def extract_company_name_from_email(email_address: str) -> str:
@@ -109,12 +110,12 @@ def load_template(template_path: Path) -> str:
     return template_path.read_text(encoding="utf-8")
 
 
-def build_message(recipient: str, body: str) -> MIMEMultipart:
+def build_message(to_header: str, body: str) -> MIMEMultipart:
     """Build the email message with the text body and CV attachment."""
     message = MIMEMultipart()
     message["Subject"] = config.EMAIL_SUBJECT
     message["From"] = formataddr((config.SENDER_NAME, config.SENDER_EMAIL))
-    message["To"] = recipient
+    message["To"] = to_header
 
     message.attach(MIMEText(body, "plain", "utf-8"))
 
@@ -130,36 +131,44 @@ def build_message(recipient: str, body: str) -> MIMEMultipart:
     return message
 
 
-def send_email(recipient: str, body: str) -> None:
+def send_email(recipients: list[str], body: str, *, to_header: str) -> None:
     """Send one email using Gmail SMTP, or print the action in dry-run mode."""
     if config.DRY_RUN:
-        print(
-            f"dry run: would send '{config.EMAIL_SUBJECT}' "
-            f"from {config.SENDER_NAME} <{config.SENDER_EMAIL}> to {recipient} "
-            f"with attachment {CV_FILE.name}"
-        )
+        if len(recipients) == 1 and to_header == recipients[0]:
+            print(
+                f"dry run: would send '{config.EMAIL_SUBJECT}' "
+                f"from {config.SENDER_NAME} <{config.SENDER_EMAIL}> to {recipients[0]} "
+                f"with attachment {CV_FILE.name}"
+            )
+        else:
+            print(
+                f"dry run: would send '{config.EMAIL_SUBJECT}' "
+                f"from {config.SENDER_NAME} <{config.SENDER_EMAIL}> "
+                f"with To header '{to_header}' and hidden BCC recipients "
+                f"{', '.join(recipients)} with attachment {CV_FILE.name}"
+            )
         return
 
-    message = build_message(recipient, body)
+    message = build_message(to_header, body)
 
     with smtplib.SMTP(config.SMTP_SERVER, config.SMTP_PORT) as server:
         server.starttls()
         server.login(config.SENDER_EMAIL, config.SENDER_PASSWORD)
-        server.sendmail(config.SENDER_EMAIL, recipient, message.as_string())
+        server.sendmail(config.SENDER_EMAIL, recipients, message.as_string())
 
 
 def wait_before_next_email() -> None:
-    """Wait a random number of seconds between emails."""
+    """Wait a random number of seconds between sends."""
     delay_seconds = random.randint(
         config.MIN_DELAY_SECONDS,
         config.MAX_DELAY_SECONDS,
     )
 
     if config.DRY_RUN:
-        print(f"dry run: would wait {delay_seconds} seconds before the next email")
+        print(f"dry run: would wait {delay_seconds} seconds before the next send")
         return
 
-    print(f"waiting {delay_seconds} seconds before the next email...")
+    print(f"waiting {delay_seconds} seconds before the next send...")
     time.sleep(delay_seconds)
 
 
@@ -187,12 +196,26 @@ def validate_config() -> bool:
     if config.MAX_DELAY_SECONDS < config.MIN_DELAY_SECONDS:
         errors.append("MAX_DELAY_SECONDS must be greater than or equal to MIN_DELAY_SECONDS.")
 
+    if config.BATCH_SEND_BY_BCC and config.BCC_BATCH_SIZE < 1:
+        errors.append("BCC_BATCH_SIZE must be greater than or equal to 1.")
+
     if errors:
         for error in errors:
             print(f"failed: {error}")
         return False
 
     return True
+
+
+def build_send_batches(contacts: list[dict[str, str]]) -> list[list[dict[str, str]]]:
+    """Split eligible contacts into one-by-one sends or BCC batches."""
+    if not config.BATCH_SEND_BY_BCC:
+        return [[contact] for contact in contacts]
+
+    return [
+        contacts[index : index + config.BCC_BATCH_SIZE]
+        for index in range(0, len(contacts), config.BCC_BATCH_SIZE)
+    ]
 
 
 def main() -> None:
@@ -212,7 +235,9 @@ def main() -> None:
         print("failed: no email addresses found in emails.csv")
         return
 
-    for index, contact in enumerate(contacts):
+    eligible_contacts = []
+
+    for contact in contacts:
         email_address = contact["email"]
         company_name = contact["company"]
         normalized_company_name = normalize_company_name(company_name)
@@ -221,22 +246,45 @@ def main() -> None:
             print(f"skipped: {email_address} ({company_name} is in rejected.txt)")
             continue
 
-        print(f"sending to {email_address} ({company_name})...")
+        eligible_contacts.append(contact)
+
+    if not eligible_contacts:
+        print("failed: no email addresses left after applying rejected.txt")
+        return
+
+    send_batches = build_send_batches(eligible_contacts)
+
+    for index, batch in enumerate(send_batches):
+        batch_recipients = [contact["email"] for contact in batch]
+
+        if config.BATCH_SEND_BY_BCC:
+            print(
+                f"sending batch via BCC to {len(batch_recipients)} recipients: "
+                f"{', '.join(batch_recipients)}"
+            )
+        else:
+            print(f"sending to {batch_recipients[0]} ({batch[0]['company']})...")
 
         try:
-            send_email(email_address, email_body)
-            print(f"success: {email_address}")
+            send_email(
+                batch_recipients,
+                email_body,
+                to_header=BCC_TO_HEADER if config.BATCH_SEND_BY_BCC else batch_recipients[0],
+            )
+            if config.BATCH_SEND_BY_BCC:
+                print(
+                    f"success: sent BCC batch to {len(batch_recipients)} recipients"
+                )
+            else:
+                print(f"success: {batch_recipients[0]}")
         except Exception as error:
-            print(f"failed: {email_address} -> {error}")
+            if config.BATCH_SEND_BY_BCC:
+                print(f"failed: BCC batch {', '.join(batch_recipients)} -> {error}")
+            else:
+                print(f"failed: {batch_recipients[0]} -> {error}")
             continue
 
-        remaining_emails = [
-            next_contact
-            for next_contact in contacts[index + 1 :]
-            if normalize_company_name(next_contact["company"]) not in rejected_companies
-        ]
-
-        if remaining_emails:
+        if index < len(send_batches) - 1:
             wait_before_next_email()
 
 
