@@ -1,0 +1,7 @@
+# Add one rejected company name per line.
+# Examples:
+# company
+# startup ai
+netia
+swishlive
+test
