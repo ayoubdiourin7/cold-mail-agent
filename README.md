@@ -37,6 +37,43 @@ The workflow is split into three stages:
 
 The validation cache is persisted in `invalid_email_domains.txt`, so domains that already failed are skipped on later runs.
 
+## Cache Flow
+
+The local cache is checked before any mail is sent:
+
+```text
+emails.csv
+   |
+   v
+load caches: sent.txt + invalid_email_domains.txt
+   |
+   v
+for each contact:
+  1. normalize email and domain
+  2. skip if domain is in invalid_email_domains.txt
+  3. validate syntax
+  4. resolve MX records
+  5. optionally probe SMTP
+  6. if domain fails, append it to invalid_email_domains.txt
+  7. skip if email is already in sent.txt
+  8. skip if company is in rejected.txt
+   |
+   v
+batch remaining contacts
+   |
+   v
+send mail
+   |
+   v
+append successful emails to sent.txt
+```
+
+Design summary:
+
+- `invalid_email_domains.txt` is a domain-level cache. It prevents rechecking domains that already failed.
+- `sent.txt` is an email-level cache. It prevents resending to exact addresses that were already delivered.
+- `rejected.txt` is a business-rule filter. It blocks companies before sending even if the email itself is valid.
+
 ## Contact Format
 
 Preferred CSV format:
