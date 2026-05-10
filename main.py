@@ -10,14 +10,23 @@ from email.utils import formataddr
 from pathlib import Path
 
 import config
+from email_validator import (
+    load_invalid_domains,
+    format_validation_reason,
+    normalize_email_address,
+    validate_email_address,
+    validation_dependency_error,
+)
 
 
 # Keep file paths relative to this script so the project works from any folder.
 BASE_DIR = Path(__file__).resolve().parent
 EMAILS_FILE = BASE_DIR / "emails.csv"
 REJECTED_FILE = BASE_DIR / "rejected.txt"
-TEMPLATE_FILE = BASE_DIR / "template.txt"
+TEMPLATE_FILE = BASE_DIR / config.MAIL_TO_SEND 
 CV_FILE = BASE_DIR / config.CV_FILENAME
+SENT_FILE = BASE_DIR / config.SENT_FILENAME
+INVALID_DOMAINS_FILE = BASE_DIR / config.INVALID_DOMAINS_FILENAME
 BCC_TO_HEADER = "undisclosed-recipients:;"
 
 
@@ -60,7 +69,7 @@ def load_emails(csv_path: Path) -> list[dict[str, str]]:
             raise ValueError("emails.csv must contain a column named 'email'.")
 
         for row in reader:
-            email_address = (row.get("email") or "").strip().lower()
+            email_address = normalize_email_address(row.get("email") or "")
             company_name = (row.get("company") or "").strip()
 
             if not email_address:
@@ -108,6 +117,46 @@ def load_rejected_companies(rejected_path: Path) -> set[str]:
 def load_template(template_path: Path) -> str:
     """Load the email body from template.txt."""
     return template_path.read_text(encoding="utf-8")
+
+
+def load_sent_emails(sent_path: Path) -> set[str]:
+    """Load exact recipient email addresses from sent.txt."""
+    if not sent_path.exists():
+        return set()
+
+    sent_emails = set()
+
+    with sent_path.open("r", encoding="utf-8") as sent_file:
+        for line in sent_file:
+            email_address = normalize_email_address(line)
+
+            if not email_address or email_address.startswith("#"):
+                continue
+
+            sent_emails.add(email_address)
+
+    return sent_emails
+
+
+def append_sent_emails(sent_path: Path, email_addresses: list[str], known_sent_emails: set[str]) -> None:
+    """Append newly sent email addresses to sent.txt and update the in-memory cache."""
+    new_email_addresses = []
+
+    for email_address in email_addresses:
+        normalized_email_address = normalize_email_address(email_address)
+
+        if not normalized_email_address or normalized_email_address in known_sent_emails:
+            continue
+
+        known_sent_emails.add(normalized_email_address)
+        new_email_addresses.append(normalized_email_address)
+
+    if not new_email_addresses:
+        return
+
+    with sent_path.open("a", encoding="utf-8") as sent_file:
+        for email_address in new_email_addresses:
+            sent_file.write(f"{email_address}\n")
 
 
 def build_message(to_header: str, body: str) -> MIMEMultipart:
@@ -172,6 +221,47 @@ def wait_before_next_email() -> None:
     time.sleep(delay_seconds)
 
 
+def filter_invalid_contacts(contacts: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Skip contacts with invalid email addresses before batching or sending."""
+    if not config.VALIDATE_EMAILS_BEFORE_SENDING:
+        return contacts
+
+    valid_contacts = []
+    invalid_count = 0
+    known_invalid_domains = load_invalid_domains(INVALID_DOMAINS_FILE)
+
+    for contact in contacts:
+        validation_result = validate_email_address(
+            contact["email"],
+            known_invalid_domains=known_invalid_domains,
+            invalid_domains_path=INVALID_DOMAINS_FILE,
+        )
+
+        if not validation_result.is_valid:
+            invalid_count += 1
+            print(
+                f"invalidated: {contact['email']} "
+                f"({format_validation_reason(validation_result.reason)})"
+            )
+            print(
+                f"skipped: {contact['email']} "
+                f"({format_validation_reason(validation_result.reason)})"
+            )
+            continue
+
+        valid_contacts.append(
+            {
+                **contact,
+                "email": validation_result.normalized_email,
+            }
+        )
+
+    if invalid_count:
+        print(f"skipped {invalid_count} invalid email address(es) before sending")
+
+    return valid_contacts
+
+
 def validate_config() -> bool:
     """Check the required configuration before sending anything."""
     errors = []
@@ -186,6 +276,12 @@ def validate_config() -> bool:
         errors.append(
             "GMAIL_APP_PASSWORD is missing. Set it in your environment before running."
         )
+
+    if config.VALIDATE_EMAILS_BEFORE_SENDING:
+        dependency_error = validation_dependency_error()
+
+        if dependency_error is not None:
+            errors.append(dependency_error)
 
     if not CV_FILE.exists():
         errors.append(f"CV file not found: {CV_FILE.name}")
@@ -226,6 +322,7 @@ def main() -> None:
     try:
         contacts = load_emails(EMAILS_FILE)
         rejected_companies = load_rejected_companies(REJECTED_FILE)
+        sent_emails = load_sent_emails(SENT_FILE)
         email_body = load_template(TEMPLATE_FILE)
     except Exception as error:
         print(f"failed: could not load project files -> {error}")
@@ -235,12 +332,22 @@ def main() -> None:
         print("failed: no email addresses found in emails.csv")
         return
 
+    contacts = filter_invalid_contacts(contacts)
+
+    if not contacts:
+        print("failed: no valid email addresses left after validation")
+        return
+
     eligible_contacts = []
 
     for contact in contacts:
         email_address = contact["email"]
         company_name = contact["company"]
         normalized_company_name = normalize_company_name(company_name)
+
+        if config.SKIP_EMAILS_ALREADY_IN_SENT and email_address in sent_emails:
+            print(f"skipped: {email_address} (already exists in {SENT_FILE.name})")
+            continue
 
         if normalized_company_name in rejected_companies:
             print(f"skipped: {email_address} ({company_name} is in rejected.txt)")
@@ -277,6 +384,9 @@ def main() -> None:
                 )
             else:
                 print(f"success: {batch_recipients[0]}")
+
+            if not config.DRY_RUN:
+                append_sent_emails(SENT_FILE, batch_recipients, sent_emails)
         except Exception as error:
             if config.BATCH_SEND_BY_BCC:
                 print(f"failed: BCC batch {', '.join(batch_recipients)} -> {error}")

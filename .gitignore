@@ -20,9 +20,14 @@ emails.csv
 rejected.txt
 sent.txt
 template.txt
+templaceRelance.txt
+invalid_email_domains.txt
 
 # Private source documents and exports
 data/
 *.xlsx
 *.xls
 *.pdf
+
+# Agent files
+AGENTS.md
