@@ -27,6 +27,16 @@ It does the following:
 - `sent.txt`: exact email addresses that were already sent
 - `cv.pdf`: CV attached to each email
 
+## Architecture
+
+The workflow is split into three stages:
+
+1. `main.py` loads contacts, rejected companies, sent addresses, and the email template.
+2. `email_validator.py` validates each address, checks DNS/MX status, and optionally probes SMTP.
+3. `main.py` filters rejected or invalid contacts, batches the remaining recipients, sends mail, and appends successful sends to `sent.txt`.
+
+The validation cache is persisted in `invalid_email_domains.txt`, so domains that already failed are skipped on later runs.
+
 ## Contact Format
 
 Preferred CSV format:
